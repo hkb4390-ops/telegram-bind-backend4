@@ -13,11 +13,15 @@ const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
 if (!serviceAccountString) {
     console.error("FIREBASE_SERVICE_ACCOUNT is missing!");
 } else {
-    const serviceAccount = JSON.parse(serviceAccountString);
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-        databaseURL: "https://hrrybimd-default-rtdb.firebaseio.com/"
-    });
+    try {
+        const serviceAccount = JSON.parse(serviceAccountString);
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
+            databaseURL: "https://hrrybimd-default-rtdb.firebaseio.com/"
+        });
+    } catch (e) {
+        console.error("Error parsing FIREBASE_SERVICE_ACCOUNT:", e);
+    }
 }
 
 const db = admin.database();
@@ -63,7 +67,7 @@ app.post('/api/bind/status', async (req, res) => {
 
         const data = snapshot.val();
         if (data.status === 'completed') {
-            // Delete token after successful read for security (one-time use API)
+            // Delete token after successful read for security
             await db.ref(`binding_tokens/${token}`).remove();
             return res.json({ success: true, status: "completed", telegramData: data.telegramData });
         } else if (Date.now() > data.expiresAt) {
@@ -78,12 +82,10 @@ app.post('/api/bind/status', async (req, res) => {
 });
 
 // 5. UNBIND API
-// In a real app, you'd send an Auth token or Device ID. Here we simulate a secure unbind.
 app.post('/api/bind/unbind', async (req, res) => {
     const { telegramId } = req.body;
     if (!telegramId) return res.status(400).json({ success: false });
 
-    // Remove from main bindings database
     await db.ref(`telegram_bindings/${telegramId}`).remove();
     res.json({ success: true });
 });
@@ -100,10 +102,37 @@ app.post('/telegram/webhook', async (req, res) => {
         const snapshot = await tokenRef.once('value');
         
         if (snapshot.exists() && snapshot.val().status === 'pending' && snapshot.val().expiresAt > Date.now()) {
+            
+            // 🌟 NAYA CODE: Profile Picture Fetch Karne Ke Liye
+            let finalPhotoUrl = "";
+            try {
+                // User ki profile photos fetch karo
+                const photoResponse = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getUserProfilePhotos?user_id=${user.id}&limit=1`);
+                
+                if (photoResponse.data.ok && photoResponse.data.result.total_count > 0) {
+                    // Sabse acchi quality wali photo ki ID nikalo
+                    const photoArray = photoResponse.data.result.photos[0];
+                    const fileId = photoArray[photoArray.length - 1].file_id;
+                    
+                    // Photo ID se uska File Path nikalo
+                    const fileResponse = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
+                    
+                    if (fileResponse.data.ok) {
+                        const filePath = fileResponse.data.result.file_path;
+                        // Final URL ban gaya jo app me dikhega
+                        finalPhotoUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+                    }
+                }
+            } catch (err) {
+                console.error("Photo fetch error:", err.message);
+                // Agar photo hide ki hui hai ya koi error aaye, to khali rakho, app apna letter avatar dikha degi
+            }
+
             const telegramData = {
                 telegramId: user.id,
                 firstName: user.first_name || '',
                 username: user.username || 'No Username',
+                photoUrl: finalPhotoUrl, // 👈 Yahan URL save ho jayega
                 connectedAt: Date.now()
             };
 
@@ -130,7 +159,7 @@ app.post('/telegram/webhook', async (req, res) => {
         }
     }
     
-    // Always return 200 OK to Telegram, otherwise it will retry infinitely
+    // Always return 200 OK to Telegram
     res.sendStatus(200);
 });
 
@@ -139,3 +168,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
